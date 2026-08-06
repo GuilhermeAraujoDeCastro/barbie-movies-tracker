@@ -6,3 +6,7 @@ js/config.js
 .env.*
 .vercel/
 *.log
+
+# Artefatos e exemplo sem segredos
+dist/
+!.env.example
