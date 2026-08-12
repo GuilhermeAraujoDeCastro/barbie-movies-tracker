@@ -21,7 +21,8 @@ const MIME = {
 createServer(async (request, response) => {
   let filePath;
   try {
-    const urlPath = request.url === "/" ? "/index.html" : request.url.split("?")[0];
+    const pathname = new URL(request.url, 'http://localhost').pathname;
+    const urlPath = pathname === '/' ? '/index.html' : pathname;
     filePath = join(ROOT, decodeURIComponent(urlPath));
   } catch {
     response.writeHead(400);
