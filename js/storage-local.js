@@ -2,32 +2,34 @@
 // progresso fica salvo no localStorage do navegador (nao sincroniza entre
 // aparelhos, mas funciona na hora, sem depender do Firebase).
 
-const KEY_PREFIX = "barbie-tracker:";
+import { normalizeProgress, todayLocal } from './collection.js';
+const IS_DEMO=new URLSearchParams(globalThis.location?.search||'').get('demo')==='1';
+const KEY_PREFIX = "barbie-tracker:guest:v2:";
+const LEGACY_PREFIX = "barbie-tracker:";
 const LAST_GUEST_KEY = "barbie-tracker:last-guest";
 
 function emptyProgress() {
-  return { watched: [], ratings: {}, reviews: {} };
+  return normalizeProgress();
 }
 
 export function loadLocalProgress(profileName) {
-  const raw = localStorage.getItem(KEY_PREFIX + profileName);
+  const key = KEY_PREFIX + encodeURIComponent(profileName);
+  const raw = localStorage.getItem(key) ?? (IS_DEMO?null:localStorage.getItem(LEGACY_PREFIX + profileName));
   if (!raw) {
     return emptyProgress();
   }
   try {
     const parsed = JSON.parse(raw);
-    return {
-      watched: Array.isArray(parsed.watched) ? parsed.watched : [],
-      ratings: typeof parsed.ratings === "object" && parsed.ratings !== null ? parsed.ratings : {},
-      reviews: typeof parsed.reviews === "object" && parsed.reviews !== null ? parsed.reviews : {},
-    };
+    const progress = normalizeProgress(parsed);
+    localStorage.setItem(key, JSON.stringify(progress));
+    return progress;
   } catch {
     return emptyProgress();
   }
 }
 
 export function saveLocalProgress(profileName, progress) {
-  localStorage.setItem(KEY_PREFIX + profileName, JSON.stringify(progress));
+  localStorage.setItem(KEY_PREFIX + encodeURIComponent(profileName), JSON.stringify(normalizeProgress(progress)));
 }
 
 export function toggleWatched(progress, movieId) {
@@ -37,7 +39,9 @@ export function toggleWatched(progress, movieId) {
   } else {
     watched.add(movieId);
   }
-  return { ...progress, watched: [...watched] };
+  const watchedAt = {...progress.watchedAt};
+  if(watched.has(movieId) && !watchedAt[movieId]) watchedAt[movieId]=todayLocal();
+  return { ...progress, watched: [...watched], watchedAt };
 }
 
 export function setRating(progress, movieId, rating) {
