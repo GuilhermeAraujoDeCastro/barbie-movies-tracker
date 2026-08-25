@@ -3,15 +3,19 @@
 // nem em DOM, so' monta/valida o objeto.
 
 import { validateReview } from "./reviews.js";
+import { normalizeProgress } from './collection.js';
 
 export function exportProgressPayload(profile, progress) {
   return {
+    version: 2,
     exportedAt: new Date().toISOString(),
     profileName: profile.name,
     progress: {
       watched: [...progress.watched],
       ratings: { ...progress.ratings },
       reviews: { ...progress.reviews },
+      watchlist: {...progress.watchlist},
+      watchedAt: {...progress.watchedAt},
     },
   };
 }
@@ -31,6 +35,7 @@ export function parseImportedProgress(rawJson) {
   if (!progress || typeof progress !== "object") {
     return null;
   }
+  if(Array.isArray(progress)||!Array.isArray(progress.watched)||!progress.ratings||Array.isArray(progress.ratings)||typeof progress.ratings!=='object'||(parsed.version!=null&&![1,2].includes(parsed.version)))return null;
 
   const watched = Array.isArray(progress.watched) ? progress.watched.filter((id) => typeof id === "number") : [];
 
@@ -51,5 +56,16 @@ export function parseImportedProgress(rawJson) {
         )
       : {};
 
-  return { watched, ratings, reviews };
+  return normalizeProgress({ watched, ratings, reviews, watchlist: progress.watchlist, watchedAt: progress.watchedAt });
+}
+
+function csvCell(value) {
+  let text=String(value??'');
+  if(/^[\s\uFEFF]*[=+\-@]/.test(text) || /^[\t\r\n]/.test(text))text="'"+text;
+  return '"'+text.replaceAll('"','""')+'"';
+}
+export function exportCollectionCsv(movies,progress) {
+  const rows=[['Título','Ano de lançamento','Assistido','Nota','Resenha','Data assistida','Prioridade quero assistir']];
+  for(const m of movies)rows.push([m.title,m.year,progress.watched.includes(m.id)?'Sim':'Não',progress.ratings[m.id],progress.reviews[m.id],progress.watchedAt?.[m.id],progress.watchlist?.[m.id]]);
+  return '\uFEFF'+rows.map(row=>row.map(csvCell).join(';')).join('\r\n');
 }
