@@ -1,10 +1,16 @@
 # Barbie Movies Tracker
 
-![Tela inicial do Barbie Movies Tracker](docs/capa.png)
+![Capa do Barbie Movies Tracker](docs/capa.png)
 
 Catálogo dos filmes da Barbie pra marcar os que você já viu, dar nota, escrever uma resenha curta e acompanhar o progresso. Os dados dos filmes vêm do TMDB.
 
 Site: https://barbie-movies-tracker.vercel.app
+
+[![CI](https://github.com/GuilhermeAraujoDeCastro/barbie-movies-tracker/actions/workflows/ci.yml/badge.svg)](https://github.com/GuilhermeAraujoDeCastro/barbie-movies-tracker/actions/workflows/ci.yml)
+
+| Coleção | Perfil e estatísticas | No celular |
+|---|---|---|
+| ![Catálogo com os pôsteres e a busca](docs/screenshots/01-home.png) | ![Perfil com os filmes assistidos e as notas](docs/screenshots/02-detalhe.png) | ![Catálogo numa tela de celular](docs/screenshots/03-mobile.png) |
 
 ## O que tem
 
@@ -28,12 +34,12 @@ Buscar "Barbie" no TMDB traz muito filme sem relação com a franquia. Por isso 
 
 JavaScript puro em módulos ES, sem framework. Firebase Authentication e Firestore guardam as contas; o modo visitante usa `localStorage`. A notificação de filme novo roda numa function da Vercel (`api/notify-new-movies.js`) com web-push e firebase-admin, agendada pelo cron da Vercel uma vez por dia. O Sentry é opcional, pra acompanhar erros em produção.
 
-No build, os nomes internos do JavaScript são embaralhados e o JS, o CSS e o HTML saem minificados. Quem abre o F12 no site publicado não vê o código legível.
+No build, os nomes internos do JavaScript são encurtados e o JS, o CSS e o HTML saem minificados, o que deixa os arquivos menores. Isso não protege nada: qualquer pessoa ainda consegue ler o que roda no navegador. O que é segredo de verdade (a chave do TMDB e a conta de serviço do Firebase) fica só nas functions da Vercel.
 
 ## Estrutura
 
 ```
-Selecionar-filme-da-barbie-/
+barbie-movies-tracker/
 ├── index.html
 ├── sw.js                    service worker (cache offline)
 ├── manifest.json
@@ -78,6 +84,10 @@ O GitHub Actions roda o build de produção a cada push, com chaves falsas, pra 
 
 As regras do Firestore ficam em `firestore.rules` e precisam ser publicadas no Firebase Console (Firestore Database, Regras).
 
-## Licença
+## Créditos e avisos
 
-Código sob a licença MIT (veja o arquivo LICENSE).
+Dados e pôsteres dos filmes vêm do [TMDB](https://www.themoviedb.org/); detalhes em [CREDITS.md](CREDITS.md). Barbie é marca da Mattel. Este é um projeto de fã e de estudo, sem fins lucrativos e sem ligação com a Mattel ou com o TMDB.
+
+## Licença e contato
+
+Código sob a licença MIT (veja [LICENSE](LICENSE)). Feito por Guilherme Araujo de Castro: [portfólio](https://guilhermearaujodecastro.vercel.app) · [LinkedIn](https://www.linkedin.com/in/guilherme-araujo-de-castro) · guilhermeacastro.2006@gmail.com
