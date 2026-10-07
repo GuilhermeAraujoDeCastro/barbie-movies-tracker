@@ -1,2 +1,8 @@
 node_modules/
 js/config.js
+
+# Segredos, deploy e logs locais
+.env
+.env.*
+.vercel/
+*.log
