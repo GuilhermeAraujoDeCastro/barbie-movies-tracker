@@ -61,29 +61,29 @@
         <div class="onboarding-card">
           <h2>Modo visitante</h2>
           <p>Digite um nome. O progresso fica salvo neste navegador.</p>
-          <form id="guest-form">
+          <form id="guest-form" inert>
             <label for="guest-name">Seu nome</label>
-            <input id="guest-name" name="guest-name" type="text" required maxlength="40" placeholder="Ex: Ana" autocomplete="off" />
-            <button type="submit" class="btn-primary">Entrar</button>
+            <input id="guest-name" type="text" required maxlength="40" placeholder="Ex: Ana" autocomplete="off" />
+            <button type="submit" class="btn-primary" disabled>Entrar</button>
           </form>
         </div>
         <div class="onboarding-card">
           <h2>Entrar com Google</h2>
           <p>O progresso fica salvo na sua conta e sincroniza entre aparelhos.</p>
-          <button id="google-login-btn" type="button" class="btn-primary">Entrar com Google</button>
+          <button id="google-login-btn" type="button" class="btn-primary" disabled>Entrar com Google</button>
           <p id="google-login-error" class="error-text" hidden></p>
         </div>
         <div class="onboarding-card">
           <h2>Entrar com email</h2>
           <p>Crie uma conta ou entre com email e senha. O progresso fica salvo na nuvem e sincroniza entre aparelhos.</p>
-          <form id="email-form">
+          <form id="email-form" inert>
             <label for="email-input">Email</label>
-            <input id="email-input" name="email" type="email" required autocomplete="email" placeholder="seu@email.com" />
+            <input id="email-input" type="email" required autocomplete="email" placeholder="seu@email.com" />
             <label for="password-input">Senha</label>
-            <input id="password-input" name="password" type="password" required minlength="6" autocomplete="current-password" placeholder="Minimo 6 caracteres" />
+            <input id="password-input" type="password" required minlength="6" autocomplete="current-password" placeholder="Minimo 6 caracteres" />
             <div class="email-actions">
-              <button type="submit" id="email-login-btn" class="btn-primary">Entrar</button>
-              <button type="button" id="email-signup-btn" class="btn-secondary">Criar conta</button>
+              <button type="submit" id="email-login-btn" class="btn-primary" disabled>Entrar</button>
+              <button type="button" id="email-signup-btn" class="btn-secondary" disabled>Criar conta</button>
             </div>
             <p id="email-login-error" class="error-text" hidden></p>
           </form>
@@ -124,10 +124,14 @@
               <button id="logout-btn" type="button" class="btn-secondary">Sair</button>
               <button id="copy-share-link-btn" type="button" class="btn-secondary" data-owner-only>Copiar link publico</button>
               <button id="export-btn" type="button" class="btn-secondary" data-owner-only>Exportar progresso</button>
+          <button type="button" class="btn-secondary" id="export-csv-btn">Exportar CSV</button>
+          <button type="button" class="btn-secondary" id="revoke-share-btn" hidden>Revogar compartilhamento</button>
+          <button type="button" class="btn-secondary" id="rotate-share-btn" hidden>Gerar outro link</button>
               <button id="import-btn" type="button" class="btn-secondary" data-owner-only>Importar progresso</button>
               <input id="import-file-input" type="file" accept="application/json" hidden />
               <button id="notify-btn" type="button" class="btn-secondary" data-owner-only hidden>Ativar notificacoes</button>
             </div>
+            <button type="button" id="retry-sync-btn" class="btn-secondary" hidden>Tentar sincronizar</button>
             <p id="backup-error" class="error-text" hidden></p>
             <p id="share-copy-status" class="stat-note" hidden></p>
           </div>
@@ -148,6 +152,7 @@
 
             <h3 class="section-title">Nota media por decada</h3>
             <div id="decade-stats" class="stat-bars"></div>
+        <section><h3>Diário mensal</h3><div id="monthly-diary"></div><p>Filmes antigos sem data informada ficam fora do diário.</p></section>
           </section>
 
           <section id="compare-section" class="compare-section" data-owner-only>
@@ -197,6 +202,7 @@
           <input id="only-unwatched" type="checkbox" />
           Somente nao assistidos
         </label>
+      <label for="watchlist-filter">Coleção</label><select id="watchlist-filter"><option value="all">Todos os pendentes</option><option value="wanted">Quero assistir, por prioridade</option></select>
 
         <label class="field-label">
           Ordenar por

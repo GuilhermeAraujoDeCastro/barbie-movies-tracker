@@ -1,29 +1,72 @@
-// Regras do Firestore pra este projeto - NAO sao aplicadas automaticamente
-// por nada neste repositorio (nao ha deploy automatizado de regras aqui).
-// Cole isto manualmente no Firebase Console (Build > Firestore Database >
-// Regras) do projeto configurado em js/config.js (FIREBASE_CONFIG).
-//
-// progress/{userId}: um doc so' por usuario, com {watched, ratings,
-// reviews}. "get" publico (nao "list") viabiliza o link "?share=uid"
-// (js/main.js) sem dar pra listar/descobrir todos os usuarios - so' quem
-// ja sabe o uid exato (recebeu o link) consegue ler. Escrita continua so'
-// do dono.
-//
-// pushSubscriptions/{userId}: inscricao de push do navegador (item 13).
-// So' o dono le/escreve a propria; a function que manda a notificacao
-// (api/notify-new-movies.js) usa o Admin SDK, que ignora essas regras.
+// Schema v2: progress/{uid} guarda metadados e a cópia legada imutável;
+// movies/{id} guarda campos do filme. shares/{token}/movies contém cópias
+// públicas. Toda leitura consulta o token ativo; a coleção privada exige dono.
+// Arquivo local: nenhuma regra é publicada por estes testes.
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /progress/{userId} {
-      allow get: if true;
-      allow list: if false;
-      allow write: if request.auth != null && request.auth.uid == userId;
+    function isOwner(uid) { return request.auth != null && request.auth.uid == uid; }
+    function validMovie(d) {
+      return d.keys().hasAll(['watched','rating','review','watchPriority','watchedAt'])
+        && d.keys().hasOnly(['watched','rating','review','watchPriority','watchedAt'])
+        && d.watched is bool && (d.rating == null || (d.rating is int && d.rating >= 1 && d.rating <= 5))
+        && d.review is string && d.review.size() <= 500
+        && d.watchPriority is int && d.watchPriority >= 0 && d.watchPriority <= 3
+        && (d.watchedAt == null || (d.watchedAt is string && d.watchedAt.size() == 10 && d.watchedAt.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')));
     }
-
-    match /pushSubscriptions/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+    function validMeta(d) {
+      return d.schemaVersion == 2
+        && d.get('shareEnabled',false) is bool
+        && (d.get('shareToken',null) == null || (d.shareToken is string && d.shareToken.size() == 36))
+        && d.get('movieIds',[]) is list && d.get('movieIds',[]).size() <= 200;
+    }
+    function shareOwner(token) { return get(/databases/$(database)/documents/shares/$(token)).data.owner; }
+    function activeShare(token) {
+      let uid = shareOwner(token);
+      let p = get(/databases/$(database)/documents/progress/$(uid)).data;
+      return p.get('shareEnabled',false) == true && p.get('shareToken',null) == token;
+    }
+    match /progress/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid) && validMeta(request.resource.data)
+        && request.resource.data.keys().hasOnly(['schemaVersion','shareEnabled','shareToken','movieIds']);
+      // Campos legados não podem ser apagados nem alterados pela migração.
+      allow update: if isOwner(uid) && validMeta(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['schemaVersion','shareEnabled','shareToken','movieIds']);
+      allow delete: if false;
+      match /movies/{id} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid) && id.matches('[1-9][0-9]*') && validMovie(request.resource.data);
+        allow delete: if isOwner(uid);
+      }
+    }
+    match /shares/{token} {
+      allow get: if activeShare(token);
+      allow list: if false;
+      allow create: if request.auth != null && request.resource.data.owner == request.auth.uid
+        && request.resource.data.owner is string && request.resource.data.owner.size() <= 128
+        && token.size() == 36 && request.resource.data.createdAt is int
+        && request.resource.data.keys().hasOnly(['owner','createdAt']);
+      allow update: if false;
+      allow delete: if isOwner(resource.data.owner);
+      match /movies/{id} {
+        allow read: if activeShare(token);
+        allow create, update: if isOwner(getAfter(/databases/$(database)/documents/shares/$(token)).data.owner) && validMovie(request.resource.data) && id.matches('[1-9][0-9]*');
+        allow delete: if isOwner(shareOwner(token));
+      }
+    }
+    match /pushSubscriptions/{uid} {
+      allow read, delete: if isOwner(uid);
+      allow create, update: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['subscription','savedAt'])
+        && request.resource.data.savedAt is int
+        && request.resource.data.subscription is map
+        && request.resource.data.subscription.keys().hasOnly(['endpoint','expirationTime','keys'])
+        && request.resource.data.subscription.endpoint is string && request.resource.data.subscription.endpoint.size() <= 2048
+        && request.resource.data.subscription.keys is map
+        && request.resource.data.subscription.keys.keys().hasOnly(['p256dh','auth'])
+        && request.resource.data.subscription.keys.p256dh is string && request.resource.data.subscription.keys.p256dh.size() <= 512
+        && request.resource.data.subscription.keys.auth is string && request.resource.data.subscription.keys.auth.size() <= 512;
     }
   }
 }

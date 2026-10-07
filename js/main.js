@@ -1,12 +1,6 @@
-// Cola tudo (DOM, config, Firebase, TMDB) nos modulos puros. Esse arquivo
-// aqui nao tem teste automatizado (depende do navegador de verdade: DOM,
-// localStorage, Firebase; o fluxo de visitante tem cobertura via Playwright
-// em e2e/guest-flow.spec.js), mas toda a logica que ele chama (progress.js,
-// filters.js, ratings.js, reviews.js, stats.js, tmdb.js, storage-local.js,
-// backup.js, firebase-app.js) foi escrita separada exatamente pra poder ser
-// testada sem navegador. Se algo der errado aqui, o mais provavel e' um
-// erro de "encanamento" (id errado, evento que nao disparou), nao de regra
-// de negocio.
+import { demoMovies, addDemoReturnLink } from './demo.js';
+const DEMO_MODE=new URLSearchParams(location.search).get('demo')==='1';
+// Integra a tela aos módulos; regressões executáveis ficam em tests/.
 
 import { calculateProgress, formatProgressLabel } from "./progress.js";
 import {
@@ -32,9 +26,11 @@ import {
   setReview,
   toggleWatched,
 } from "./storage-local.js";
-import { exportProgressPayload, parseImportedProgress } from "./backup.js";
+import { exportProgressPayload, parseImportedProgress, exportCollectionCsv } from "./backup.js";
 import { averageRatingByDecade, genreCounts, topRatedMovies, yearWithMostWatchedReleases } from "./stats.js";
 import { debounce } from "./debounce.js";
+import { normalizeProgress, changedMovies, setWatchPriority, setWatchedDay, watchedByMonth, todayLocal } from './collection.js';
+import { createPendingReviews } from './pending-reviews.js';
 
 // v2: o filme em cache ganhou releaseDate/genres - muda a chave pra quem
 // tinha cache antigo buscar de novo em vez de ficar sem essa informacao
@@ -113,7 +109,7 @@ const el = {
 const state = {
   profile: null, // { mode: "guest" | "google" | "email" | "share", id, name }
   movies: [],
-  progress: { watched: [], ratings: {}, reviews: {} },
+  progress: normalizeProgress(),
   readOnly: false, // true quando entrou via link publico (?share=uid)
   genreMap: {},
   detailMovieId: null,
@@ -122,6 +118,15 @@ const state = {
 // Link publico (?share=uid) tem prioridade sobre qualquer login automatico.
 const SHARED_UID = new URLSearchParams(window.location.search).get("share");
 
+let sessionNumber = 0;
+let lastQueuedProgress = normalizeProgress();
+let saveQueue = Promise.resolve();
+let failedPatches = {};
+let shareSettings = {enabled:false,token:null};
+function beginSession() {
+  pendingReviews.cancel(); sessionNumber++;
+  lastQueuedProgress=normalizeProgress(); failedPatches={};
+}
 let appConfig = null;
 let firebaseModule = null;
 let firebaseRefs = null; // { app, auth, db }
@@ -130,10 +135,10 @@ init();
 
 async function init() {
   initTheme();
-  registerServiceWorker();
-  appConfig = await loadConfig();
+  if(!DEMO_MODE)registerServiceWorker();
+  appConfig = DEMO_MODE?{}:await loadConfig();
 
-  if (!temTmdb()) {
+  if (!DEMO_MODE && !temTmdb()) {
     el.configWarning.hidden = false;
   }
   if (appConfig && appConfig.SENTRY_DSN) {
@@ -146,7 +151,7 @@ async function init() {
     el.googleLoginBtn.disabled = true;
     el.emailLoginBtn.disabled = true;
     el.emailSignupBtn.disabled = true;
-    await tryAutoLoginGuest();
+    if(!DEMO_MODE)await tryAutoLoginGuest();
   }
 
   maybeShowTourBanner();
@@ -163,6 +168,12 @@ async function init() {
   });
   el.copyShareLinkBtn.addEventListener("click", handleCopyShareLink);
   el.exportBtn.addEventListener("click", handleExportProgress);
+  document.getElementById('retry-sync-btn').addEventListener('click',()=>persistProgress().catch(()=>{}));
+  document.getElementById('export-csv-btn').addEventListener('click',()=>download(exportCollectionCsv(state.movies,state.progress),'colecao-barbie.csv','text/csv;charset=utf-8'));
+  document.getElementById('revoke-share-btn').addEventListener('click',()=>changeSharing('revoke'));
+  document.getElementById('rotate-share-btn').addEventListener('click',()=>changeSharing('rotate'));
+  document.getElementById('watchlist-filter').addEventListener('change',render);
+  el.detailContent.addEventListener('change',handleCollectionChange);
   el.importBtn.addEventListener("click", () => el.importFileInput.click());
   el.importFileInput.addEventListener("change", handleImportProgress);
   el.notifyBtn.addEventListener("click", handleNotifyClick);
@@ -196,7 +207,14 @@ async function init() {
   });
   el.navBtns.forEach((btn) => btn.addEventListener("click", () => switchView(btn.dataset.view)));
   el.bottomNav.addEventListener("keydown", handleTabsKeydown);
+  el.guestForm.inert = false;
+  el.guestForm.querySelector("button[type=submit]").disabled = false;
+  el.emailForm.inert = !firebaseRefs;
+  el.googleLoginBtn.disabled = !firebaseRefs;
+  el.emailLoginBtn.disabled = !firebaseRefs;
+  el.emailSignupBtn.disabled = !firebaseRefs;
 
+  if(DEMO_MODE){state.profile={mode:'guest',id:'demo',name:'Demonstração fictícia'};state.progress=loadLocalProgress('demo');lastQueuedProgress=structuredClone(state.progress);addDemoReturnLink();await enterApp();return;}
   await enterShareViewIfRequested();
 }
 
@@ -278,12 +296,13 @@ async function setUpErrorMonitoring(dsn) {
 async function setUpFirebase(firebaseConfig) {
   try {
     firebaseModule = await import("./firebase-app.js");
-    firebaseRefs = firebaseModule.initFirebase(firebaseConfig);
+    firebaseRefs = firebaseModule.initFirebase(firebaseConfig, appConfig.FIREBASE_EMULATOR);
     firebaseModule.watchAuthState(firebaseRefs.auth, (user) => {
+      if(!user && ['google','email'].includes(state.profile?.mode)){void handleLogout({skipAuth:true});return;}
       if (SHARED_UID) {
         return;
       }
-      if (user && !state.profile) {
+      if (user && (!state.profile || state.profile.id !== user.uid)) {
         loginWithFirebaseUser(user, firebaseProviderMode(user));
       } else if (!user && !state.profile) {
         tryAutoLoginGuest();
@@ -291,12 +310,13 @@ async function setUpFirebase(firebaseConfig) {
     });
   } catch (error) {
     console.error("Nao foi possivel iniciar o Firebase:", error);
+    firebaseRefs = null;
     el.googleLoginBtn.disabled = true;
     el.emailLoginBtn.disabled = true;
     el.emailSignupBtn.disabled = true;
     el.googleLoginError.hidden = false;
     el.googleLoginError.textContent = "Login com Google indisponivel agora (confira js/config.js).";
-    await tryAutoLoginGuest();
+    if(!DEMO_MODE)await tryAutoLoginGuest();
   }
 }
 
@@ -315,6 +335,7 @@ async function tryAutoLoginGuest() {
   }
   state.profile = { mode: "guest", id: lastName, name: lastName };
   state.progress = loadLocalProgress(lastName);
+  lastQueuedProgress=structuredClone(state.progress);
   await enterApp();
 }
 
@@ -324,8 +345,10 @@ async function handleGuestLogin(event) {
   if (!name) {
     return;
   }
+  beginSession();
   state.profile = { mode: "guest", id: name, name };
   state.progress = loadLocalProgress(name);
+  lastQueuedProgress=structuredClone(state.progress);
   saveLastGuestName(name);
   await enterApp();
 }
@@ -400,8 +423,14 @@ function emailErrorMessage(error) {
 }
 
 async function loginWithFirebaseUser(user, mode) {
-  state.profile = { mode, id: user.uid, name: user.displayName || user.email || "sua conta" };
-  state.progress = await firebaseModule.loadUserProgress(firebaseRefs.db, user.uid);
+  if(state.profile?.id===user.uid && state.profile.mode!=="guest") return;
+  beginSession(); const session=sessionNumber;
+  state.profile = { mode, id:user.uid, name:user.displayName||user.email||"sua conta" };
+  state.progress=normalizeProgress(); state.readOnly=false;
+  const progress=await firebaseModule.loadUserProgress(firebaseRefs.db,user.uid);
+  const settings=await firebaseModule.getShareSettings(firebaseRefs.db,user.uid);
+  if(session!==sessionNumber) return;
+  state.progress=progress; lastQueuedProgress=structuredClone(progress); shareSettings=settings;
   await enterApp();
 }
 
@@ -409,6 +438,7 @@ async function loginWithFirebaseUser(user, mode) {
 // colecao de outra pessoa, sem login. So funciona se o Firestore tiver a
 // regra de leitura publica em progress/{uid} (veja firestore.rules).
 async function enterShareViewIfRequested() {
+  let shareFailed=false;
   const sharedUid = SHARED_UID;
   if (!sharedUid || state.profile) {
     return;
@@ -420,19 +450,22 @@ async function enterShareViewIfRequested() {
   state.profile = { mode: "share", id: sharedUid, name: "Colecao compartilhada" };
   state.readOnly = true;
   try {
-    state.progress = await firebaseModule.loadUserProgress(firebaseRefs.db, sharedUid);
+    state.progress = await firebaseModule.loadSharedProgress(firebaseRefs.db, sharedUid);
   } catch (error) {
+    shareFailed=true;
     console.error("Erro ao carregar colecao compartilhada:", error);
-    state.progress = { watched: [], ratings: {}, reviews: {} };
+    state.progress = normalizeProgress();
   }
   el.shareBanner.hidden = false;
   el.appSection.classList.add("read-only");
   await enterApp();
+  if(shareFailed)showListStatus('Esta coleção não está disponível. O link pode ter sido revogado.');
 }
 
-async function handleLogout() {
+async function handleLogout(options={}) {
+  beginSession();
   const isRealAccount = state.profile && state.profile.mode !== "guest" && state.profile.mode !== "share";
-  if (isRealAccount && firebaseModule && firebaseRefs) {
+  if (isRealAccount && firebaseModule && firebaseRefs && !options.skipAuth) {
     try {
       await firebaseModule.logout(firebaseRefs.auth);
     } catch (error) {
@@ -441,8 +474,9 @@ async function handleLogout() {
   }
   // Sempre esquece o visitante salvo: sair de uma conta nao pode cair num visitante antigo.
   clearLastGuestName();
+  document.getElementById('retry-sync-btn').hidden=true;
   state.profile = null;
-  state.progress = { watched: [], ratings: {}, reviews: {} };
+  state.progress = normalizeProgress();
   state.readOnly = false;
   state.detailMovieId = null;
   el.appSection.classList.remove("read-only");
@@ -475,6 +509,10 @@ function updateProfileActionsVisibility() {
   el.copyShareLinkBtn.hidden = isShare || isGuest;
   el.compareSection.hidden = isShare || isGuest;
   el.notifyBtn.hidden = isShare || isGuest || !pushNotificationsAvailable();
+  document.getElementById('export-csv-btn').hidden=isShare;
+  document.getElementById('revoke-share-btn').hidden=isShare||isGuest||!shareSettings.enabled;
+  document.getElementById('rotate-share-btn').hidden=isShare||isGuest||!shareSettings.enabled;
+  el.copyShareLinkBtn.textContent=shareSettings.enabled?'Copiar link público':'Ativar compartilhamento';
 }
 
 function pushNotificationsAvailable() {
@@ -574,6 +612,7 @@ async function ensureGenreMap() {
 }
 
 async function loadMovies({ forceRefresh }) {
+  if(DEMO_MODE||appConfig?.LOCAL_FIXTURES){state.movies=structuredClone(demoMovies);populateYearFilter();render();return;}
   let usedCache = false;
   if (!forceRefresh) {
     const cached = readMoviesCache();
@@ -697,7 +736,9 @@ function render() {
     onlyUnwatched: el.onlyUnwatched.checked,
     watchedIds: state.progress.watched,
   });
-  const sorted = applySort(filtered, el.sortSelect.value);
+  const selection=document.getElementById('watchlist-filter').value;
+  const wanted=selection==='wanted'?filtered.filter(m=>state.progress.watchlist[m.id]):filtered;
+  const sorted = selection==='wanted'?wanted.sort((a,b)=>(state.progress.watchlist[b.id]||0)-(state.progress.watchlist[a.id]||0)):applySort(wanted, el.sortSelect.value);
 
   el.movieGrid.innerHTML =
     sorted.length > 0
@@ -736,6 +777,7 @@ function renderWatchedList(completed) {
 }
 
 function renderStats(releasedMovies) {
+  document.getElementById('monthly-diary').innerHTML=statBarsHtml(watchedByMonth(state.progress));
   const ranked = topRatedMovies(releasedMovies, state.progress, 10);
   el.rankingList.innerHTML =
     ranked.length > 0
@@ -995,7 +1037,24 @@ function detailContentHtml(movie) {
     <p class="detail-overview">${escapeHtml(overviewText)}</p>
     ${castText ? `<p class="detail-cast"><strong>Elenco:</strong> ${escapeHtml(castText)}</p>` : ""}
     ${controls}
+    <div class="review-field">
+      <label for="watch-priority">Quero assistir</label>
+      <select id="watch-priority" ${state.readOnly?'disabled':''}>
+        ${[[0,'Fora da lista'],[1,'Prioridade baixa'],[2,'Prioridade média'],[3,'Prioridade alta']].map(([n,label])=>`<option value="${n}" ${state.progress.watchlist[movie.id]===n?'selected':''}>${label}</option>`).join('')}
+      </select>
+      ${watched?`<label for="watched-day">Data em que assistiu</label><input type="date" id="watched-day" max="${todayLocal()}" value="${state.progress.watchedAt[movie.id]||''}" ${state.readOnly?'disabled':''}>`:''}
+    </div>
   `;
+}
+
+function handleCollectionChange(event) {
+  if(state.readOnly||!state.detailMovieId)return;
+  try {
+    if(event.target.id==='watch-priority')state.progress=setWatchPriority(state.progress,state.detailMovieId,Number(event.target.value));
+    else if(event.target.id==='watched-day')state.progress=setWatchedDay(state.progress,state.detailMovieId,event.target.value);
+    else return;
+    persistProgress();render();
+  } catch(error){el.backupError.hidden=false;el.backupError.textContent=error.message;}
 }
 
 function handleDetailClick(event) {
@@ -1024,58 +1083,55 @@ function handleDetailClick(event) {
   }
 }
 
-// Um debounce por filme: com um so', digitar na resenha de B logo depois de A cancelava o salvamento de A.
-const salvadoresDeResenha = new Map();
-function saveReviewDebounced(movieId, text) {
-  if (!salvadoresDeResenha.has(movieId)) {
-    salvadoresDeResenha.set(movieId, debounce((texto) => {
-      const validated = validateReview(texto);
-      if (validated === null) {
-        return;
-      }
-      state.progress = setReview(state.progress, movieId, validated);
-      persistProgress();
-    }, 400));
-  }
-  salvadoresDeResenha.get(movieId)(text);
-}
-
+const pendingReviews=createPendingReviews((session,movieId,text)=>{
+  if(session!==sessionNumber || !state.profile || state.readOnly)return;
+  persistProgress();
+});
 function handleDetailReviewInput(event) {
-  if (state.readOnly || !state.detailMovieId || event.target.id !== "review-textarea") {
-    return;
-  }
-  saveReviewDebounced(state.detailMovieId, event.target.value);
+  if(state.readOnly||!state.detailMovieId||event.target.id!=="review-textarea")return;
+  const validated=validateReview(event.target.value); if(validated===null)return;
+  state.progress=setReview(state.progress,state.detailMovieId,validated);
+  pendingReviews.schedule(sessionNumber,state.detailMovieId,validated);
 }
-
 function persistProgress() {
-  if (state.readOnly) {
-    return; // seguranca extra: nunca grava em cima de uma colecao compartilhada
+  if(state.readOnly||!state.profile)return Promise.resolve();
+  const profile={...state.profile},session=sessionNumber,progress=structuredClone(state.progress);
+  if(profile.mode==='guest') {
+    try{saveLocalProgress(profile.id,progress);return Promise.resolve();}
+    catch(error){showListStatus('Falha ao salvar neste navegador. Exporte um backup no Perfil.');el.backupError.hidden=false;el.backupError.textContent='Não foi possível salvar neste navegador. Exporte um backup.';return Promise.resolve();}
   }
-  if (state.profile.mode === "guest") {
-    // Sem espaco (ou storage bloqueado) o erro parava o clique antes do render e o botao parecia quebrado.
-    try {
-      saveLocalProgress(state.profile.id, state.progress);
-    } catch (error) {
-      console.error("Erro ao salvar progresso localmente:", error);
-    }
-  } else if (firebaseModule && firebaseRefs) {
-    firebaseModule.saveUserProgress(firebaseRefs.db, state.profile.id, state.progress).catch((error) => {
-      console.error("Erro ao salvar progresso no Firestore:", error);
-    });
-  }
+  const patch=changedMovies(lastQueuedProgress,progress);lastQueuedProgress=progress;
+  if(!Object.keys(patch).length&&!Object.keys(failedPatches).length)return saveQueue;
+  saveQueue=saveQueue.catch(()=>{}).then(async()=>{
+    if(session!==sessionNumber)return;
+    const outgoing=structuredClone(failedPatches);
+    for(const [id,fields] of Object.entries(patch))outgoing[id]={...outgoing[id],...fields};
+    try{await firebaseModule.saveProgressPatch(firebaseRefs.db,profile.id,outgoing);if(session===sessionNumber){failedPatches={};el.backupError.hidden=true;document.getElementById('retry-sync-btn').hidden=true;}}
+    catch(error){if(session===sessionNumber){failedPatches=outgoing;document.getElementById('retry-sync-btn').hidden=false;showListStatus("Falha ao sincronizar. Exporte um backup no Perfil e tente novamente conectado.");el.backupError.hidden=false;el.backupError.textContent='Não foi possível sincronizar. Suas alterações estão nesta tela; exporte um backup e tente novamente conectado.';}throw error;}
+  });
+  // O evento de clique não aguarda a Promise; o erro permanece visível.
+  saveQueue.catch(()=>{});return saveQueue;
 }
 
 // ---------- link publico + comparar colecoes ----------
 
-async function handleCopyShareLink() {
-  const url = `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(state.profile.id)}`;
+async function changeSharing(action) {
+  const profile=state.profile,session=sessionNumber;
+  if(!profile||state.readOnly||profile.mode==='guest')return;
   try {
-    await navigator.clipboard.writeText(url);
-    showShareCopyStatus("Link copiado!");
-  } catch (error) {
-    console.error("Nao foi possivel copiar o link automaticamente:", error);
-    showShareCopyStatus(url);
-  }
+    await saveQueue;
+    if(action==='revoke')await firebaseModule.revokeShare(firebaseRefs.db,profile.id);
+    else shareSettings.token=await firebaseModule.publishShare(firebaseRefs.db,profile.id);
+    if(session!==sessionNumber)return;
+    shareSettings.enabled=action!=='revoke';
+    if(action==='revoke')shareSettings.token=null;
+    updateProfileActionsVisibility();showShareCopyStatus(action==='revoke'?'Compartilhamento revogado.':'Novo link ativado. O anterior foi revogado.');
+  }catch(error){showShareCopyStatus('Não foi possível alterar o compartilhamento. Tente novamente conectado.');}
+}
+async function handleCopyShareLink() {
+  if(!shareSettings.enabled){await changeSharing('activate');if(!shareSettings.enabled)return;}
+  const url=`${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(shareSettings.token)}`;
+  try{await navigator.clipboard.writeText(url);showShareCopyStatus('Link copiado!');}catch{showShareCopyStatus(url);}
 }
 
 function showShareCopyStatus(message) {
@@ -1097,7 +1153,7 @@ async function handleCompareSubmit(event) {
   }
   el.compareResult.textContent = "Comparando...";
   try {
-    const otherProgress = await firebaseModule.loadUserProgress(firebaseRefs.db, uid);
+    const otherProgress = await firebaseModule.loadSharedProgress(firebaseRefs.db, uid);
     const mine = new Set(state.progress.watched.filter((id) => state.progress.ratings[id]));
     const theirs = new Set(otherProgress.watched.filter((id) => otherProgress.ratings[id]));
     const commonIds = [...mine].filter((id) => theirs.has(id));
@@ -1133,6 +1189,9 @@ function extractShareId(input) {
 
 // ---------- import/export do progresso ----------
 
+function download(content,name,type) {
+  const url=URL.createObjectURL(new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();URL.revokeObjectURL(url);
+}
 function handleExportProgress() {
   const payload = exportProgressPayload(state.profile, state.progress);
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -1158,8 +1217,9 @@ async function handleImportProgress(event) {
     el.backupError.textContent = "Esse arquivo nao parece um backup valido do Barbie Movies Tracker.";
     return;
   }
+  if(!confirm('Substituir esta coleção pelo backup? Exporte a atual antes de continuar.'))return;
   state.progress = imported;
-  persistProgress();
+  await persistProgress().catch(()=>{});
   render();
 }
 

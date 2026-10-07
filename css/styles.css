@@ -944,3 +944,13 @@ button {
   color: var(--accent);
   margin: 0.3rem 0 0;
 }
+
+/* Controles de coleção e prévia, com a paleta existente. */
++.demo-return { display:block; padding:1rem; text-align:center; }
++dialog { max-width:min(92vw,650px); max-height:85vh; overflow:auto; border-radius:18px; padding:1.5rem; background:var(--card-bg,white); color:var(--text,#222); }
++dialog::backdrop { background:#0008; }
++#merge-conflicts label { display:block; margin:1rem 0; }
++#merge-conflicts select { display:block; width:100%; margin-top:.4rem; }
++.completion-date { max-width:100%; margin-top:.4rem; }
++#watch-priority,#watched-day { display:block; max-width:100%; margin:.5rem 0; }
++
