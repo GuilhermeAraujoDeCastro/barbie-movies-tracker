@@ -7,7 +7,10 @@
   "license": "MIT",
   "scripts": {
     "dev": "node scripts/dev-static-server.js",
-    "build": "node scripts/generate-config.js && node scripts/mangle-names.js && node scripts/minify.js"
+    "build": "node scripts/build.js",
+    "test": "node --test tests/collection.test.mjs tests/dev-static-server.test.mjs",
+    "test:rules": "node --test tests/firestore-emulator.test.mjs",
+    "local:emulator": "node scripts/prepare-emulator.js"
   },
   "devDependencies": {
     "clean-css": "^5.3.3",

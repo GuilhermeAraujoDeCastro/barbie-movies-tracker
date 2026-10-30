@@ -45,5 +45,5 @@ export const SENTRY_DSN = ${JSON.stringify(process.env.SENTRY_DSN || "")};
 export const VAPID_PUBLIC_KEY = ${JSON.stringify(process.env.VAPID_PUBLIC_KEY || "")};
 `;
 
-writeFileSync(new URL("../js/config.js", import.meta.url), conteudo);
+writeFileSync("js/config.js", conteudo);
 console.log("js/config.js gerado a partir das variaveis de ambiente.");
